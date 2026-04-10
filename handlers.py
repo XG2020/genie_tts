@@ -593,8 +593,9 @@ async def clean_up():
 
 async def send_audio(chat_key, file):
     pairs = chat_key.split("_")
-    chat_type = pairs[0]
-    chat_id = pairs[2]
+    chat_type = pairs[1] if len(pairs) > 1 else pairs[0]
+    chat_id = pairs[2] if len(pairs) > 2 else pairs[-1]
+    is_group_chat = "group" in chat_type
     bot = get_bot()
     temp_file_path = None
     if isinstance(file, bytes):
@@ -604,7 +605,7 @@ async def send_audio(chat_key, file):
     else:
         audio = MessageSegment.record(file=file)
     try:
-        if chat_type == "onebot_v11-group":
+        if is_group_chat:
             await bot.send_group_msg(group_id=chat_id, message=audio)
         else:
             await bot.send_private_msg(user_id=chat_id, message=audio)
@@ -615,7 +616,7 @@ async def send_audio(chat_key, file):
                     tmp_file.write(normalized_audio)
                     temp_file_path = tmp_file.name
                 fallback_audio = MessageSegment.record(file=Path(temp_file_path).as_uri())
-                if chat_type == "onebot_v11-group":
+                if is_group_chat:
                     await bot.send_group_msg(group_id=chat_id, message=fallback_audio)
                 else:
                     await bot.send_private_msg(user_id=chat_id, message=fallback_audio)
