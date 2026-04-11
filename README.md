@@ -48,6 +48,7 @@
        - Feibi (菲比) — 鸣潮 (Wuthering Waves) (中文)
    您可以直接使用。现在默认注册了一个角色是feibi。您可以去app.py按照说明修改。
     -   若要使用您自己的模型，请将您训练和转换好的模型上传到您自己的 Hugging Face 模型仓库，然后在 Space 的 `app.py` 文件中修改 `REPO_ID` 和 `CHARACTERS` 字典。
+    -   支持的模型版本： GPT-SoVITS V2, V2ProPlus 可去GPT-SoVITS官方的模型分享社区下载[点击访问](https://www.ai-hobbyist.com/forum.php?mod=forumdisplay&fid=138&filter=typeid&typeid=97&sortid=1)
     -   **【关键步骤】** 在您的空间中，**您必须创建一个名为 `reference_audio` 的文件夹**，并将所有用于注册情感的参考音频文件（如 `.wav`, `.ogg`）放入其中。
     -   **注意：** Genie 服务目前有加载3个模型的上限，请确保 `CHARACTERS` 字典中启用的角色不超过3个。
 3.  **开启自动保活（可选）**：Hugging Face Space 超过 24 小时无人访问会休眠。插件新增了“自动保活空间”的开关，开启后会定时访问空间主页防止休眠， **注意：此功能需要在插件管理开启定时器插件**。
