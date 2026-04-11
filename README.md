@@ -39,7 +39,7 @@
     -   服务仓库: [https://huggingface.co/spaces/XG2020/na_genie_tts/tree/main)](https://huggingface.co/spaces/XG2020/na_genie_tts/tree/main)
     -   点击页面右上角的 **"Duplicate this Space"** 即可一键复制，拥有一个完全属于您自己的、免费的TTS服务。
     -   api接口url格式为 https://your-name-your-space.hf.space
-       - tips:你可以将你复制的仓库地址发给ai询问，让ai帮你转换成.hf.space的空间地址
+       - tips: 你可以将你复制好的仓库地址发给ai询问，让ai帮你转换成.hf.space的空间地址
 
 2.  **使用自定义模型**:
     -   默认服务会从我的模型仓库 [XG2020/genie_tts_models](https://huggingface.co/XG2020/genie_tts_models/tree/main) 下载模型。该模型仓库已包含多个预置角色，
