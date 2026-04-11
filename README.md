@@ -45,7 +45,7 @@
        - Mika (聖園ミカ) — 蔚蓝档案 (Blue Archive) (日语)
        - ThirtySeven (37) — 重返未来：1999 (Reverse: 1999) (英语)
        - Feibi (菲比) — 鸣潮 (Wuthering Waves) (中文)
-      您可以直接使用。现在默认注册三个角色是feibi。您可以去app.py按照说明修改。
+   您可以直接使用。现在默认注册了一个角色是feibi。您可以去app.py按照说明修改。
     -   若要使用您自己的模型，请将您训练和转换好的模型上传到您自己的 Hugging Face 模型仓库，然后在 Space 的 `app.py` 文件中修改 `REPO_ID` 和 `CHARACTERS` 字典。
     -   **【关键步骤】** 在您的空间中，**您必须创建一个名为 `reference_audio` 的文件夹**，并将所有用于注册情感的参考音频文件（如 `.wav`, `.ogg`）放入其中。
     -   **注意：** Genie 服务目前有加载3个模型的上限，请确保 `CHARACTERS` 字典中启用的角色不超过3个。
