@@ -10,7 +10,7 @@ plugin = NekroPlugin(
     name="语音合成插件",
     module_name="genie_tts",
     description="提供文本到语音合成功能",
-    version="1.1.0",
+    version="1.0.0",
     author="XGGM",
     url="https://github.com/XG2020/genie_tts",
 )
@@ -65,7 +65,7 @@ class TTSConfig(ConfigBase):
     )
     ENABLE_AUTO_EMOTION_RECOGNITION: bool = Field(
         default=False,
-        title="启用自动情感识别",
+        title="全局启用自动情感识别",
         description="启用后会根据文本内容自动匹配当前角色下最合适的已注册情感。",
     )
     AUTO_EMOTION_MODEL: str = Field(
