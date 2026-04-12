@@ -12,6 +12,7 @@ from typing import Annotated
 import httpx
 from nonebot import get_bot
 from nonebot.adapters.onebot.v11 import MessageSegment
+from pydantic import BaseModel, Field
 
 from nekro_agent.api import core
 from nekro_agent.api.schemas import AgentCtx
@@ -32,14 +33,41 @@ from .emotion_manager import EmotionManager
 from .plugin import config, get_model_group_info, plugin
 
 _server_locks: dict[str, asyncio.Lock] = {}
-_session_emotions: dict[str, dict[str, str]] = {}
-_session_auto_emotion_enabled: dict[str, bool] = {}
-_session_auto_emotion_character: dict[str, str] = {}
 _KEEPALIVE_CHAT_KEY = "system_genie_tts_keepalive"
 _PLUGIN_CONFIG_KEY = (
     f"{getattr(plugin, 'author', '')}.{getattr(plugin, 'module_name', '')}".strip(".")
     or "XGGM.genie_tts"
 )
+_CHAT_STATE_STORE_KEY = "chat_state"
+store = plugin.store
+
+
+class TTSChatState(BaseModel):
+    """会话级 TTS 状态（持久化到插件数据）"""
+
+    selected_character: str = Field(default="")
+    selected_emotion: str = Field(default="")
+    auto_emotion_enabled: bool | None = Field(default=None)
+    auto_emotion_character: str = Field(default="")
+
+
+async def _get_tts_chat_state(chat_key: str) -> TTSChatState:
+    raw_data = await store.get(chat_key=chat_key, store_key=_CHAT_STATE_STORE_KEY)
+    if not raw_data:
+        return TTSChatState()
+    try:
+        return TTSChatState.model_validate_json(raw_data)
+    except Exception as e:
+        logger.warning(f"读取 GenieTTS 会话状态失败，已回退默认状态: {e}")
+        return TTSChatState()
+
+
+async def _save_tts_chat_state(chat_key: str, state: TTSChatState) -> None:
+    await store.set(
+        chat_key=chat_key,
+        store_key=_CHAT_STATE_STORE_KEY,
+        value=state.model_dump_json(),
+    )
 
 
 def _create_emotion_manager():
@@ -393,26 +421,30 @@ async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str
     if not character_name or not ref_audio_path or not ref_audio_text:
         raise ValueError("请先配置角色、参考音频路径和参考音频文本。")
 
-    selected = _session_emotions.get(chat_key)
-    if selected:
+    chat_state = await _get_tts_chat_state(chat_key)
+
+    selected_character = chat_state.selected_character.strip()
+    selected_emotion = chat_state.selected_emotion.strip()
+    if selected_character and selected_emotion:
         emo_data = _emotion_manager.get_emotion_data(
-            selected["character"],
-            selected["emotion"],
+            selected_character,
+            selected_emotion,
         )
         if emo_data:
             return (
-                selected["character"],
+                selected_character,
                 emo_data["ref_audio_path"],
                 emo_data["ref_audio_text"],
                 emo_data.get("language", language),
             )
 
-    auto_emotion_enabled = _session_auto_emotion_enabled.get(
-        chat_key,
-        bool(config.ENABLE_AUTO_EMOTION_RECOGNITION),
+    auto_emotion_enabled = (
+        chat_state.auto_emotion_enabled
+        if chat_state.auto_emotion_enabled is not None
+        else bool(config.ENABLE_AUTO_EMOTION_RECOGNITION)
     )
     auto_emotion_character = (
-        _session_auto_emotion_character.get(chat_key, "").strip() or character_name
+        chat_state.auto_emotion_character.strip() or character_name
     )
     if auto_emotion_enabled and auto_emotion_character:
         detected_emotion = await _detect_emotion_name(text=text, character_name=auto_emotion_character)
@@ -797,7 +829,10 @@ async def genie_tts_emotion_set_cmd(
     if not _emotion_manager.get_emotion_data(character_name, emotion_name):
         return CmdCtl.failed(f"未找到情感: {character_name} - {emotion_name}")
     chat_key = _extract_chat_key_from_context(context)
-    _session_emotions[chat_key] = {"character": character_name, "emotion": emotion_name}
+    chat_state = await _get_tts_chat_state(chat_key)
+    chat_state.selected_character = character_name
+    chat_state.selected_emotion = emotion_name
+    await _save_tts_chat_state(chat_key, chat_state)
     return CmdCtl.success(f"当前会话已切换情感: {character_name} - {emotion_name}")
 
 
@@ -811,7 +846,10 @@ async def genie_tts_emotion_set_cmd(
 )
 async def genie_tts_emotion_clear_cmd(context: CommandExecutionContext) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
-    _session_emotions.pop(chat_key, None)
+    chat_state = await _get_tts_chat_state(chat_key)
+    chat_state.selected_character = ""
+    chat_state.selected_emotion = ""
+    await _save_tts_chat_state(chat_key, chat_state)
     return CmdCtl.success("当前会话情感覆盖已清除，将使用默认角色/默认情感配置。")
 
 
@@ -829,11 +867,14 @@ async def genie_tts_auto_emotion_on_cmd(
 ) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
     character_name = character_name.strip()
-    _session_auto_emotion_enabled[chat_key] = True
+    chat_state = await _get_tts_chat_state(chat_key)
+    chat_state.auto_emotion_enabled = True
     if character_name:
-        _session_auto_emotion_character[chat_key] = character_name
+        chat_state.auto_emotion_character = character_name
+        await _save_tts_chat_state(chat_key, chat_state)
         return CmdCtl.success(f"当前会话已开启自动情感识别，角色: {character_name}")
-    _session_auto_emotion_character.pop(chat_key, None)
+    chat_state.auto_emotion_character = ""
+    await _save_tts_chat_state(chat_key, chat_state)
     return CmdCtl.success("当前会话已开启自动情感识别，角色将使用默认角色。")
 
 
@@ -847,8 +888,10 @@ async def genie_tts_auto_emotion_on_cmd(
 )
 async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
-    _session_auto_emotion_enabled[chat_key] = False
-    _session_auto_emotion_character.pop(chat_key, None)
+    chat_state = await _get_tts_chat_state(chat_key)
+    chat_state.auto_emotion_enabled = False
+    chat_state.auto_emotion_character = ""
+    await _save_tts_chat_state(chat_key, chat_state)
     return CmdCtl.success("当前会话已关闭自动情感识别。")
 
 
@@ -862,8 +905,13 @@ async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> Co
 )
 async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
-    enabled = _session_auto_emotion_enabled.get(chat_key, bool(config.ENABLE_AUTO_EMOTION_RECOGNITION))
-    character_name = _session_auto_emotion_character.get(chat_key, "").strip() or (config.DEFAULT_MODEL or "").strip()
+    chat_state = await _get_tts_chat_state(chat_key)
+    enabled = (
+        chat_state.auto_emotion_enabled
+        if chat_state.auto_emotion_enabled is not None
+        else bool(config.ENABLE_AUTO_EMOTION_RECOGNITION)
+    )
+    character_name = chat_state.auto_emotion_character.strip() or (config.DEFAULT_MODEL or "").strip()
     status_text = "开启" if enabled else "关闭"
     return CmdCtl.success(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
 
