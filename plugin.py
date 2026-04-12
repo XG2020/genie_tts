@@ -10,7 +10,7 @@ plugin = NekroPlugin(
     name="语音合成插件",
     module_name="genie_tts",
     description="提供文本到语音合成功能",
-    version="1.0.0",
+    version="1.1.0",
     author="XGGM",
     url="https://github.com/XG2020/genie_tts",
 )
