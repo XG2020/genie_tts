@@ -652,6 +652,20 @@ def _extract_chat_key_from_context(context: CommandExecutionContext) -> str:
     raise ValueError("无法从命令上下文中获取会话信息")
 
 
+async def _save_genie_plugin_config(config_patch: dict) -> None:
+    """保存配置到 author.module_name 对应的插件标识。"""
+    module_name = getattr(plugin, "module_name", None)
+    author = getattr(plugin, "author", None)
+    if not (isinstance(author, str) and author.strip()):
+        raise RuntimeError("保存配置失败: 插件 author 为空")
+    if not (isinstance(module_name, str) and module_name.strip()):
+        raise RuntimeError("保存配置失败: 插件 module_name 为空")
+
+    key = f"{author.strip()}.{module_name.strip()}"
+    await save_plugin_config(key, config_patch)
+    logger.info(f"Genie TTS 配置已写入: key={key}, patch={config_patch}")
+
+
 @plugin.mount_command(
     name="genie_tts_set",
     description="设置默认角色",
@@ -668,7 +682,8 @@ async def genie_tts_set_cmd(
     if not model_name:
         return CmdCtl.failed("用法: genie_tts_set <角色名>")
     try:
-        await save_plugin_config("XGGM.genie_tts", {"DEFAULT_MODEL": model_name})
+        await _save_genie_plugin_config({"DEFAULT_MODEL": model_name})
+        config.DEFAULT_MODEL = model_name
     except Exception as e:
         return CmdCtl.failed(f"设置默认角色失败: {e}")
     return CmdCtl.success(f"默认角色已设置为: {model_name}")
@@ -824,10 +839,7 @@ async def genie_tts_auto_emotion_on_cmd(
     character_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
     try:
-        await save_plugin_config(
-            "XGGM.genie_tts",
-            {"ENABLE_AUTO_EMOTION_RECOGNITION": True},
-        )
+        await _save_genie_plugin_config({"ENABLE_AUTO_EMOTION_RECOGNITION": True})
         config.ENABLE_AUTO_EMOTION_RECOGNITION = True
     except Exception as e:
         return CmdCtl.failed(f"开启自动情感识别失败: {e}")
@@ -836,9 +848,15 @@ async def genie_tts_auto_emotion_on_cmd(
     _session_auto_emotion_enabled[chat_key] = True
     if character_name:
         _session_auto_emotion_character[chat_key] = character_name
-        return CmdCtl.success(f"当前会话已开启自动情感识别，角色: {character_name}")
+        return CmdCtl.success(
+            f"当前会话已开启自动情感识别，角色: {character_name}\n"
+            f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
+        )
     _session_auto_emotion_character.pop(chat_key, None)
-    return CmdCtl.success("当前会话已开启自动情感识别，角色将使用默认角色。")
+    return CmdCtl.success(
+        "当前会话已开启自动情感识别，角色将使用默认角色。\n"
+        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
+    )
 
 
 @plugin.mount_command(
@@ -851,17 +869,17 @@ async def genie_tts_auto_emotion_on_cmd(
 )
 async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> CommandResponse:
     try:
-        await save_plugin_config(
-            "XGGM.genie_tts",
-            {"ENABLE_AUTO_EMOTION_RECOGNITION": False},
-        )
+        await _save_genie_plugin_config({"ENABLE_AUTO_EMOTION_RECOGNITION": False})
         config.ENABLE_AUTO_EMOTION_RECOGNITION = False
     except Exception as e:
         return CmdCtl.failed(f"关闭自动情感识别失败: {e}")
     chat_key = _extract_chat_key_from_context(context)
     _session_auto_emotion_enabled[chat_key] = False
     _session_auto_emotion_character.pop(chat_key, None)
-    return CmdCtl.success("当前会话已关闭自动情感识别。")
+    return CmdCtl.success(
+        "当前会话已关闭自动情感识别。\n"
+        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
+    )
 
 
 @plugin.mount_command(
