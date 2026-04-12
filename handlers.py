@@ -14,6 +14,7 @@ from nonebot.adapters import Bot, Message
 from nonebot.adapters.onebot.v11 import MessageEvent, MessageSegment
 from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
+from nonebot.permission import SUPERUSER
 
 from nekro_agent.adapters.onebot_v11.matchers.command import command_guard
 from nekro_agent.api import core
@@ -632,7 +633,7 @@ async def send_audio(chat_key, file):
                 pass
 
 
-@on_command("genie_tts_set").handle()
+@on_command("genie_tts_set", permission=SUPERUSER).handle()
 async def genie_tts_set(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     model_name = cmd_content.strip()
@@ -646,7 +647,7 @@ async def genie_tts_set(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Me
         await matcher.finish(f"设置默认角色失败: {e}")
 
 
-@on_command("genie_tts_emotion_add").handle()
+@on_command("genie_tts_emotion_add", permission=SUPERUSER).handle()
 async def genie_tts_emotion_add(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
@@ -684,7 +685,7 @@ async def genie_tts_emotion_add(matcher: Matcher, event: MessageEvent, bot: Bot,
     await matcher.finish(f"已注册情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_del").handle()
+@on_command("genie_tts_emotion_del", permission=SUPERUSER).handle()
 async def genie_tts_emotion_del(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
@@ -707,7 +708,7 @@ async def genie_tts_emotion_del(matcher: Matcher, event: MessageEvent, bot: Bot,
     await matcher.finish(f"已删除情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_list").handle()
+@on_command("genie_tts_emotion_list", permission=SUPERUSER).handle()
 async def genie_tts_emotion_list(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     character_name = cmd_content.strip() or (config.DEFAULT_MODEL or "").strip()
@@ -721,7 +722,7 @@ async def genie_tts_emotion_list(matcher: Matcher, event: MessageEvent, bot: Bot
     await matcher.finish(f"角色 {character_name} 的情感：\n- " + "\n- ".join(emotions))
 
 
-@on_command("genie_tts_emotion_set").handle()
+@on_command("genie_tts_emotion_set", permission=SUPERUSER).handle()
 async def genie_tts_emotion_set(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
@@ -744,14 +745,14 @@ async def genie_tts_emotion_set(matcher: Matcher, event: MessageEvent, bot: Bot,
     await matcher.finish(f"当前会话已切换情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_clear").handle()
+@on_command("genie_tts_emotion_clear", permission=SUPERUSER).handle()
 async def genie_tts_emotion_clear(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     _session_emotions.pop(chat_key, None)
     await matcher.finish("当前会话情感覆盖已清除，将使用默认角色/默认情感配置。")
 
 
-@on_command("genie_tts_auto_emotion_on").handle()
+@on_command("genie_tts_auto_emotion_on", permission=SUPERUSER).handle()
 async def genie_tts_auto_emotion_on(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     character_name = cmd_content.strip()
@@ -764,7 +765,7 @@ async def genie_tts_auto_emotion_on(matcher: Matcher, event: MessageEvent, bot: 
     await matcher.finish("当前会话已开启自动情感识别，角色将使用默认角色。")
 
 
-@on_command("genie_tts_auto_emotion_off").handle()
+@on_command("genie_tts_auto_emotion_off", permission=SUPERUSER).handle()
 async def genie_tts_auto_emotion_off(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     _session_auto_emotion_enabled[chat_key] = False
@@ -772,7 +773,7 @@ async def genie_tts_auto_emotion_off(matcher: Matcher, event: MessageEvent, bot:
     await matcher.finish("当前会话已关闭自动情感识别。")
 
 
-@on_command("genie_tts_auto_emotion_status").handle()
+@on_command("genie_tts_auto_emotion_status", permission=SUPERUSER).handle()
 async def genie_tts_auto_emotion_status(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
     enabled = _session_auto_emotion_enabled.get(chat_key, bool(config.ENABLE_AUTO_EMOTION_RECOGNITION))
@@ -781,7 +782,7 @@ async def genie_tts_auto_emotion_status(matcher: Matcher, event: MessageEvent, b
     await matcher.finish(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
 
 
-@on_command("genie_tts_help").handle()
+@on_command("genie_tts_help", permission=SUPERUSER).handle()
 async def genie_tts_help(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
     await matcher.finish(message="使用 /genie_tts_set 来设置角色名\n具体用法:\n/genie_tts_set [角色名]\n/genie_tts_set feibi\n\n\
 情感命令:\n/genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n/genie_tts_emotion_del 情感名\n/genie_tts_emotion_list [角色名]\n/genie_tts_emotion_set 情感名\n/genie_tts_emotion_clear\n\n\
