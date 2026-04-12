@@ -838,25 +838,14 @@ async def genie_tts_auto_emotion_on_cmd(
     context: CommandExecutionContext,
     character_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
-    try:
-        await _save_genie_plugin_config({"ENABLE_AUTO_EMOTION_RECOGNITION": True})
-        config.ENABLE_AUTO_EMOTION_RECOGNITION = True
-    except Exception as e:
-        return CmdCtl.failed(f"开启自动情感识别失败: {e}")
     chat_key = _extract_chat_key_from_context(context)
     character_name = character_name.strip()
     _session_auto_emotion_enabled[chat_key] = True
     if character_name:
         _session_auto_emotion_character[chat_key] = character_name
-        return CmdCtl.success(
-            f"当前会话已开启自动情感识别，角色: {character_name}\n"
-            f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
-        )
+        return CmdCtl.success(f"当前会话已开启自动情感识别，角色: {character_name}")
     _session_auto_emotion_character.pop(chat_key, None)
-    return CmdCtl.success(
-        "当前会话已开启自动情感识别，角色将使用默认角色。\n"
-        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
-    )
+    return CmdCtl.success("当前会话已开启自动情感识别，角色将使用默认角色。")
 
 
 @plugin.mount_command(
@@ -868,18 +857,10 @@ async def genie_tts_auto_emotion_on_cmd(
     category="GenieTTS",
 )
 async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> CommandResponse:
-    try:
-        await _save_genie_plugin_config({"ENABLE_AUTO_EMOTION_RECOGNITION": False})
-        config.ENABLE_AUTO_EMOTION_RECOGNITION = False
-    except Exception as e:
-        return CmdCtl.failed(f"关闭自动情感识别失败: {e}")
     chat_key = _extract_chat_key_from_context(context)
     _session_auto_emotion_enabled[chat_key] = False
     _session_auto_emotion_character.pop(chat_key, None)
-    return CmdCtl.success(
-        "当前会话已关闭自动情感识别。\n"
-        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {config.ENABLE_AUTO_EMOTION_RECOGNITION}",
-    )
+    return CmdCtl.success("当前会话已关闭自动情感识别。")
 
 
 @plugin.mount_command(
@@ -892,10 +873,20 @@ async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> Co
 )
 async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
-    enabled = _session_auto_emotion_enabled.get(chat_key, bool(config.ENABLE_AUTO_EMOTION_RECOGNITION))
+    has_session_override = chat_key in _session_auto_emotion_enabled
+    enabled = _session_auto_emotion_enabled.get(
+        chat_key,
+        bool(config.ENABLE_AUTO_EMOTION_RECOGNITION),
+    )
     character_name = _session_auto_emotion_character.get(chat_key, "").strip() or (config.DEFAULT_MODEL or "").strip()
     status_text = "开启" if enabled else "关闭"
-    return CmdCtl.success(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
+    source_text = "会话覆盖" if has_session_override else "继承全局配置"
+    global_text = "开启" if bool(config.ENABLE_AUTO_EMOTION_RECOGNITION) else "关闭"
+    return CmdCtl.success(
+        f"当前会话自动情感识别: {status_text}（{source_text}）\n"
+        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {global_text}\n"
+        f"当前角色: {character_name}",
+    )
 
 
 @plugin.mount_command(
@@ -908,17 +899,19 @@ async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) ->
 )
 async def genie_tts_help_cmd(context: CommandExecutionContext) -> CommandResponse:
     return CmdCtl.success(
-        "使用 genie_tts_set 来设置角色名\n"
-        "具体用法:\n"
-        "genie_tts_set <角色名>\n\n"
-        "情感命令:\n"
+        "Genie TTS 指令说明\n\n"
+        "全局配置相关（会写入配置项，对后续会话生效）:\n"
+        "genie_tts_set <角色名>  # 修改 DEFAULT_MODEL\n\n"
+        "会话级相关（仅当前会话有效，不修改配置项）:\n"
+        "genie_tts_auto_emotion_on [角色名]\n"
+        "genie_tts_auto_emotion_off\n"
+        "genie_tts_auto_emotion_status\n"
+        "genie_tts_emotion_set 情感名\n"
+        "genie_tts_emotion_clear\n\n"
+        "情感库管理（全局数据）:\n"
         "genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n"
         "genie_tts_emotion_del 情感名\n"
         "genie_tts_emotion_list [角色名]\n"
-        "genie_tts_emotion_set 情感名\n"
-        "genie_tts_emotion_clear\n\n"
-        "自动情感识别命令:\n"
-        "genie_tts_auto_emotion_on [角色名]\n"
-        "genie_tts_auto_emotion_off\n"
-        "genie_tts_auto_emotion_status"
+        "genie_tts_emotion_add 角色名|情感名|参考音频路径|参考文本|[语言]\n"
+        "genie_tts_emotion_del 角色名|情感名",
     )
