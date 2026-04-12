@@ -60,7 +60,7 @@
 ### 方案二：本地或 Windows 部署
 
 - 如果您想在本地运行，请参照 Genie 官方仓库的文档进行部署。
-- 也可以可以使用我提供的docker版本构建镜像部署[genie_tts_docker](https://github.com/XG2020/genie_tts_docker)
+- 也可以使用我提供的docker版本构建镜像部署 **[genie_tts_docker](https://github.com/XG2020/genie_tts_docker)**
 - 作者还提供了 **Windows 一键整合包**，极大简化了部署流程，详情请访问其 GitHub。
 
 **部署完成后，请记下您的服务 URL (例如 `https://your-name-your-space.hf.space`)，后续配置插件时需要用到。**
