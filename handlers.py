@@ -823,6 +823,14 @@ async def genie_tts_auto_emotion_on_cmd(
     context: CommandExecutionContext,
     character_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
 ) -> CommandResponse:
+    try:
+        await save_plugin_config(
+            "XGGM.genie_tts",
+            {"ENABLE_AUTO_EMOTION_RECOGNITION": True},
+        )
+        config.ENABLE_AUTO_EMOTION_RECOGNITION = True
+    except Exception as e:
+        return CmdCtl.failed(f"开启自动情感识别失败: {e}")
     chat_key = _extract_chat_key_from_context(context)
     character_name = character_name.strip()
     _session_auto_emotion_enabled[chat_key] = True
@@ -842,6 +850,14 @@ async def genie_tts_auto_emotion_on_cmd(
     category="GenieTTS",
 )
 async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> CommandResponse:
+    try:
+        await save_plugin_config(
+            "XGGM.genie_tts",
+            {"ENABLE_AUTO_EMOTION_RECOGNITION": False},
+        )
+        config.ENABLE_AUTO_EMOTION_RECOGNITION = False
+    except Exception as e:
+        return CmdCtl.failed(f"关闭自动情感识别失败: {e}")
     chat_key = _extract_chat_key_from_context(context)
     _session_auto_emotion_enabled[chat_key] = False
     _session_auto_emotion_character.pop(chat_key, None)
