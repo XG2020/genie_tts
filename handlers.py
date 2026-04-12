@@ -7,20 +7,23 @@ import tempfile
 import time
 import wave
 from pathlib import Path
+from typing import Annotated
 
 import httpx
-from nonebot import get_bot, on_command
-from nonebot.adapters import Bot, Message
-from nonebot.adapters.onebot.v11 import MessageEvent, MessageSegment
-from nonebot.matcher import Matcher
-from nonebot.params import CommandArg
-from nonebot.permission import SUPERUSER
+from nonebot import get_bot
+from nonebot.adapters.onebot.v11 import MessageSegment
 
-from nekro_agent.adapters.onebot_v11.matchers.command import command_guard
 from nekro_agent.api import core
 from nekro_agent.api.schemas import AgentCtx
 from nekro_agent.core import logger
 from nekro_agent.services.agent.openai import gen_openai_chat_response
+from nekro_agent.services.command.base import CommandPermission
+from nekro_agent.services.command.ctl import CmdCtl
+from nekro_agent.services.command.schemas import (
+    Arg,
+    CommandExecutionContext,
+    CommandResponse,
+)
 from nekro_agent.services.plugin.base import SandboxMethodType
 from nekro_agent.services.plugin.manager import save_plugin_config
 from nekro_agent.services.timer.timer_service import timer_service
@@ -633,27 +636,59 @@ async def send_audio(chat_key, file):
                 pass
 
 
-@on_command("genie_tts_set", permission=SUPERUSER).handle()
-async def genie_tts_set(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    model_name = cmd_content.strip()
+def _extract_chat_key_from_context(context: CommandExecutionContext) -> str:
+    for attr_name in ("chat_key", "from_chat_key"):
+        value = getattr(context, attr_name, None)
+        if value:
+            return str(value)
+    for attr_name in ("agent_ctx", "ctx"):
+        inner = getattr(context, attr_name, None)
+        if not inner:
+            continue
+        for key_name in ("chat_key", "from_chat_key"):
+            value = getattr(inner, key_name, None)
+            if value:
+                return str(value)
+    raise ValueError("无法从命令上下文中获取会话信息")
+
+
+@plugin.mount_command(
+    name="genie_tts_set",
+    description="设置默认角色",
+    aliases=["genie-tts-set"],
+    usage="genie_tts_set <角色名>",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_set_cmd(
+    context: CommandExecutionContext,
+    model_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    model_name = model_name.strip()
     if not model_name:
-        await matcher.finish("用法: /genie_tts_set [角色名]")
-        return
+        return CmdCtl.failed("用法: genie_tts_set <角色名>")
     try:
         await save_plugin_config("XGGM.genie_tts", {"DEFAULT_MODEL": model_name})
-        await matcher.finish(f"默认角色已设置为: {model_name}")
     except Exception as e:
-        await matcher.finish(f"设置默认角色失败: {e}")
+        return CmdCtl.failed(f"设置默认角色失败: {e}")
+    return CmdCtl.success(f"默认角色已设置为: {model_name}")
 
 
-@on_command("genie_tts_emotion_add", permission=SUPERUSER).handle()
-async def genie_tts_emotion_add(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
+@plugin.mount_command(
+    name="genie_tts_emotion_add",
+    description="添加角色情感参考配置",
+    aliases=["genie-tts-emotion-add"],
+    usage="genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言] 或 genie_tts_emotion_add 角色名|情感名|参考音频路径|参考文本|[语言]",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_emotion_add_cmd(
+    context: CommandExecutionContext,
+    args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    parts = [x.strip() for x in args_str.split("|") if x.strip()]
     if len(parts) not in {3, 4, 5}:
-        await matcher.finish("用法: /genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n或: /genie_tts_emotion_add 角色名|情感名|参考音频路径|参考文本|[语言]")
-        return
+        return CmdCtl.failed("用法: genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言] 或 genie_tts_emotion_add 角色名|情感名|参考音频路径|参考文本|[语言]")
     if len(parts) in {3, 4}:
         character_name = (config.DEFAULT_MODEL or "").strip()
         emotion_name = parts[0]
@@ -667,11 +702,9 @@ async def genie_tts_emotion_add(matcher: Matcher, event: MessageEvent, bot: Bot,
         ref_audio_text = parts[3]
         language = parts[4] if len(parts) == 5 else None
     if not character_name:
-        await matcher.finish("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
-        return
+        return CmdCtl.failed("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
     if ".." in ref_audio_path or os.path.isabs(ref_audio_path):
-        await matcher.finish("参考音频路径必须是相对路径，且不能包含 '..'。")
-        return
+        return CmdCtl.failed("参考音频路径必须是相对路径，且不能包含 '..'。")
     ok = _emotion_manager.register_emotion(
         character_name=character_name,
         emotion_name=emotion_name,
@@ -680,18 +713,25 @@ async def genie_tts_emotion_add(matcher: Matcher, event: MessageEvent, bot: Bot,
         language=language,
     )
     if not ok:
-        await matcher.finish("注册情感失败，请检查参数。")
-        return
-    await matcher.finish(f"已注册情感: {character_name} - {emotion_name}")
+        return CmdCtl.failed("注册情感失败，请检查参数。")
+    return CmdCtl.success(f"已注册情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_del", permission=SUPERUSER).handle()
-async def genie_tts_emotion_del(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
+@plugin.mount_command(
+    name="genie_tts_emotion_del",
+    description="删除角色情感配置",
+    aliases=["genie-tts-emotion-del"],
+    usage="genie_tts_emotion_del 情感名 或 genie_tts_emotion_del 角色名|情感名",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_emotion_del_cmd(
+    context: CommandExecutionContext,
+    args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    parts = [x.strip() for x in args_str.split("|") if x.strip()]
     if len(parts) not in {1, 2}:
-        await matcher.finish("用法: /genie_tts_emotion_del 情感名\n或: /genie_tts_emotion_del 角色名|情感名")
-        return
+        return CmdCtl.failed("用法: genie_tts_emotion_del 情感名 或 genie_tts_emotion_del 角色名|情感名")
     if len(parts) == 1:
         character_name = (config.DEFAULT_MODEL or "").strip()
         emotion_name = parts[0]
@@ -699,36 +739,49 @@ async def genie_tts_emotion_del(matcher: Matcher, event: MessageEvent, bot: Bot,
         character_name = parts[0]
         emotion_name = parts[1]
     if not character_name:
-        await matcher.finish("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
-        return
+        return CmdCtl.failed("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
     ok = _emotion_manager.delete_emotion(character_name, emotion_name)
     if not ok:
-        await matcher.finish(f"未找到情感: {character_name} - {emotion_name}")
-        return
-    await matcher.finish(f"已删除情感: {character_name} - {emotion_name}")
+        return CmdCtl.failed(f"未找到情感: {character_name} - {emotion_name}")
+    return CmdCtl.success(f"已删除情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_list", permission=SUPERUSER).handle()
-async def genie_tts_emotion_list(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    character_name = cmd_content.strip() or (config.DEFAULT_MODEL or "").strip()
+@plugin.mount_command(
+    name="genie_tts_emotion_list",
+    description="列出角色可用情感",
+    aliases=["genie-tts-emotion-list"],
+    usage="genie_tts_emotion_list [角色名]",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_emotion_list_cmd(
+    context: CommandExecutionContext,
+    character_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    character_name = character_name.strip() or (config.DEFAULT_MODEL or "").strip()
     if not character_name:
-        await matcher.finish("未配置默认角色，请先设置角色或在命令中传入角色名。")
-        return
+        return CmdCtl.failed("未配置默认角色，请先设置角色或在命令中传入角色名。")
     emotions = _emotion_manager.list_emotions(character_name)
     if not emotions:
-        await matcher.finish(f"角色 {character_name} 暂无已注册情感。")
-        return
-    await matcher.finish(f"角色 {character_name} 的情感：\n- " + "\n- ".join(emotions))
+        return CmdCtl.failed(f"角色 {character_name} 暂无已注册情感。")
+    return CmdCtl.success(f"角色 {character_name} 的情感：\n- " + "\n- ".join(emotions))
 
 
-@on_command("genie_tts_emotion_set", permission=SUPERUSER).handle()
-async def genie_tts_emotion_set(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    parts = [x.strip() for x in cmd_content.split("|") if x.strip()]
+@plugin.mount_command(
+    name="genie_tts_emotion_set",
+    description="为当前会话设置情感",
+    aliases=["genie-tts-emotion-set"],
+    usage="genie_tts_emotion_set 情感名 或 genie_tts_emotion_set 角色名|情感名",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_emotion_set_cmd(
+    context: CommandExecutionContext,
+    args_str: Annotated[str, Arg("参数", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    parts = [x.strip() for x in args_str.split("|") if x.strip()]
     if len(parts) not in {1, 2}:
-        await matcher.finish("用法: /genie_tts_emotion_set 情感名\n或: /genie_tts_emotion_set 角色名|情感名")
-        return
+        return CmdCtl.failed("用法: genie_tts_emotion_set 情感名 或 genie_tts_emotion_set 角色名|情感名")
     if len(parts) == 1:
         character_name = (config.DEFAULT_MODEL or "").strip()
         emotion_name = parts[0]
@@ -736,55 +789,102 @@ async def genie_tts_emotion_set(matcher: Matcher, event: MessageEvent, bot: Bot,
         character_name = parts[0]
         emotion_name = parts[1]
     if not character_name:
-        await matcher.finish("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
-        return
+        return CmdCtl.failed("未配置默认角色，请先设置角色或在命令中显式传入角色名。")
     if not _emotion_manager.get_emotion_data(character_name, emotion_name):
-        await matcher.finish(f"未找到情感: {character_name} - {emotion_name}")
-        return
+        return CmdCtl.failed(f"未找到情感: {character_name} - {emotion_name}")
+    chat_key = _extract_chat_key_from_context(context)
     _session_emotions[chat_key] = {"character": character_name, "emotion": emotion_name}
-    await matcher.finish(f"当前会话已切换情感: {character_name} - {emotion_name}")
+    return CmdCtl.success(f"当前会话已切换情感: {character_name} - {emotion_name}")
 
 
-@on_command("genie_tts_emotion_clear", permission=SUPERUSER).handle()
-async def genie_tts_emotion_clear(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
+@plugin.mount_command(
+    name="genie_tts_emotion_clear",
+    description="清除当前会话情感覆盖",
+    aliases=["genie-tts-emotion-clear"],
+    usage="genie_tts_emotion_clear",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_emotion_clear_cmd(context: CommandExecutionContext) -> CommandResponse:
+    chat_key = _extract_chat_key_from_context(context)
     _session_emotions.pop(chat_key, None)
-    await matcher.finish("当前会话情感覆盖已清除，将使用默认角色/默认情感配置。")
+    return CmdCtl.success("当前会话情感覆盖已清除，将使用默认角色/默认情感配置。")
 
 
-@on_command("genie_tts_auto_emotion_on", permission=SUPERUSER).handle()
-async def genie_tts_auto_emotion_on(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
-    character_name = cmd_content.strip()
+@plugin.mount_command(
+    name="genie_tts_auto_emotion_on",
+    description="开启会话自动情感识别",
+    aliases=["genie-tts-auto-emotion-on"],
+    usage="genie_tts_auto_emotion_on [角色名]",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_auto_emotion_on_cmd(
+    context: CommandExecutionContext,
+    character_name: Annotated[str, Arg("角色名", positional=True, greedy=True)] = "",
+) -> CommandResponse:
+    chat_key = _extract_chat_key_from_context(context)
+    character_name = character_name.strip()
     _session_auto_emotion_enabled[chat_key] = True
     if character_name:
         _session_auto_emotion_character[chat_key] = character_name
-        await matcher.finish(f"当前会话已开启自动情感识别，角色: {character_name}")
-        return
+        return CmdCtl.success(f"当前会话已开启自动情感识别，角色: {character_name}")
     _session_auto_emotion_character.pop(chat_key, None)
-    await matcher.finish("当前会话已开启自动情感识别，角色将使用默认角色。")
+    return CmdCtl.success("当前会话已开启自动情感识别，角色将使用默认角色。")
 
 
-@on_command("genie_tts_auto_emotion_off", permission=SUPERUSER).handle()
-async def genie_tts_auto_emotion_off(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
+@plugin.mount_command(
+    name="genie_tts_auto_emotion_off",
+    description="关闭会话自动情感识别",
+    aliases=["genie-tts-auto-emotion-off"],
+    usage="genie_tts_auto_emotion_off",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> CommandResponse:
+    chat_key = _extract_chat_key_from_context(context)
     _session_auto_emotion_enabled[chat_key] = False
     _session_auto_emotion_character.pop(chat_key, None)
-    await matcher.finish("当前会话已关闭自动情感识别。")
+    return CmdCtl.success("当前会话已关闭自动情感识别。")
 
 
-@on_command("genie_tts_auto_emotion_status", permission=SUPERUSER).handle()
-async def genie_tts_auto_emotion_status(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    username, cmd_content, chat_key, chat_type = await command_guard(event, bot, arg, matcher)
+@plugin.mount_command(
+    name="genie_tts_auto_emotion_status",
+    description="查看会话自动情感识别状态",
+    aliases=["genie-tts-auto-emotion-status"],
+    usage="genie_tts_auto_emotion_status",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) -> CommandResponse:
+    chat_key = _extract_chat_key_from_context(context)
     enabled = _session_auto_emotion_enabled.get(chat_key, bool(config.ENABLE_AUTO_EMOTION_RECOGNITION))
     character_name = _session_auto_emotion_character.get(chat_key, "").strip() or (config.DEFAULT_MODEL or "").strip()
     status_text = "开启" if enabled else "关闭"
-    await matcher.finish(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
+    return CmdCtl.success(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
 
 
-@on_command("genie_tts_help", permission=SUPERUSER).handle()
-async def genie_tts_help(matcher: Matcher, event: MessageEvent, bot: Bot, arg: Message = CommandArg()):
-    await matcher.finish(message="使用 /genie_tts_set 来设置角色名\n具体用法:\n/genie_tts_set [角色名]\n/genie_tts_set feibi\n\n\
-情感命令:\n/genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n/genie_tts_emotion_del 情感名\n/genie_tts_emotion_list [角色名]\n/genie_tts_emotion_set 情感名\n/genie_tts_emotion_clear\n\n\
-自动情感识别命令:\n/genie_tts_auto_emotion_on [角色名]\n/genie_tts_auto_emotion_off\n/genie_tts_auto_emotion_status\n\n\
-本插件已支持翻译、自动情感识别、多服务故障切换、文本清洗、句子切分并发合成、自动保活。\n翻译模型请在插件配置中通过模型组选择器设置（TRANSLATION_MODEL），自动情感识别模型请设置（AUTO_EMOTION_MODEL）。")
+@plugin.mount_command(
+    name="genie_tts_help",
+    description="查看 Genie TTS 命令帮助",
+    aliases=["genie-tts-help"],
+    usage="genie_tts_help",
+    permission=CommandPermission.SUPER_USER,
+    category="GenieTTS",
+)
+async def genie_tts_help_cmd(context: CommandExecutionContext) -> CommandResponse:
+    return CmdCtl.success(
+        "使用 genie_tts_set 来设置角色名\n"
+        "具体用法:\n"
+        "genie_tts_set <角色名>\n\n"
+        "情感命令:\n"
+        "genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n"
+        "genie_tts_emotion_del 情感名\n"
+        "genie_tts_emotion_list [角色名]\n"
+        "genie_tts_emotion_set 情感名\n"
+        "genie_tts_emotion_clear\n\n"
+        "自动情感识别命令:\n"
+        "genie_tts_auto_emotion_on [角色名]\n"
+        "genie_tts_auto_emotion_off\n"
+        "genie_tts_auto_emotion_status"
+    )
