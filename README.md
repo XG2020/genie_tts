@@ -61,7 +61,10 @@
 
 - 如果您想在本地运行，请参照 Genie 官方仓库的文档进行部署。
 - 也可以使用我提供的docker版本构建镜像部署 **[genie_tts_docker](https://github.com/XG2020/genie_tts_docker)**
-   - 拉取镜像 docker pull xggm/genie-tts-docker:latest
+   - 拉取镜像
+    ```
+      docker pull xggm/genie-tts-docker:latest
+    ```
    - 在宿主机创建目录${HOME}/srv/genie_tts/models/feibi与${HOME}/srv/genie_tts/reference_audio将模型和参考音频文件分别上传到这两个文件夹
    - 然后执行下面的命令
      ```
