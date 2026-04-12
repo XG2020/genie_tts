@@ -74,9 +74,9 @@
 | `SPACE_KEEPALIVE_URL` | `""` | 额外保活地址（可选），会与 TTS 服务地址一起保活 |
 | `SPACE_KEEPALIVE_INTERVAL_MINUTES` | `25` | 两次保活任务之间的间隔分钟数（最小1） |
 | `token` | `None` | Bearer Token；为空或 `None` 时不附带鉴权头 |
-| `DEFAULT_MODEL` | `feibi` | 默认角色名（可通过命令动态修改） |
+| `DEFAULT_MODEL` | `feibi` | 默认角色名（全局配置，可通过 `genie_tts_set` 修改） |
 | `DEFAULT_EMOTION_NAME` | `""` | 默认情感名；命中时覆盖默认参考音频配置 |
-| `ENABLE_AUTO_EMOTION_RECOGNITION` | `False` | 是否启用自动情感识别（从当前角色已注册情感中自动选择） |
+| `ENABLE_AUTO_EMOTION_RECOGNITION` | `False` | 全局默认自动情感识别开关；仅作为会话初始值，运行中可被会话命令覆盖 |
 | `AUTO_EMOTION_MODEL` | `default` | 自动情感识别使用的模型组（必须是 chat 类型） |
 | `AUTO_EMOTION_PROMPT` | 见插件默认值 | 自动情感识别提示词模板，支持 `{emotion_list}` 和 `{text}` |
 | `AUTO_EMOTION_TIMEOUT` | `30` | 自动情感识别超时（秒） |
@@ -127,7 +127,9 @@
 - 省略角色名时使用 `DEFAULT_MODEL`
 - `参考音频路径` 必须是相对路径，且不能包含 `..`
 - `emotion_set` 仅在当前会话生效
+- `auto_emotion_on/off` 仅在当前会话生效，不会修改全局配置 `ENABLE_AUTO_EMOTION_RECOGNITION`
 - 自动情感识别会在当前角色已注册情感中选择最匹配项
+- `auto_emotion_status` 会优先显示当前会话状态；若当前会话未覆盖，则继承全局配置开关
 
 ## 情感配置示例
 
