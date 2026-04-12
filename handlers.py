@@ -36,6 +36,10 @@ _session_emotions: dict[str, dict[str, str]] = {}
 _session_auto_emotion_enabled: dict[str, bool] = {}
 _session_auto_emotion_character: dict[str, str] = {}
 _KEEPALIVE_CHAT_KEY = "system_genie_tts_keepalive"
+_PLUGIN_CONFIG_KEY = (
+    f"{getattr(plugin, 'author', '')}.{getattr(plugin, 'module_name', '')}".strip(".")
+    or "XGGM.genie_tts"
+)
 
 
 def _create_emotion_manager():
@@ -652,20 +656,6 @@ def _extract_chat_key_from_context(context: CommandExecutionContext) -> str:
     raise ValueError("无法从命令上下文中获取会话信息")
 
 
-async def _save_genie_plugin_config(config_patch: dict) -> None:
-    """保存配置到 author.module_name 对应的插件标识。"""
-    module_name = getattr(plugin, "module_name", None)
-    author = getattr(plugin, "author", None)
-    if not (isinstance(author, str) and author.strip()):
-        raise RuntimeError("保存配置失败: 插件 author 为空")
-    if not (isinstance(module_name, str) and module_name.strip()):
-        raise RuntimeError("保存配置失败: 插件 module_name 为空")
-
-    key = f"{author.strip()}.{module_name.strip()}"
-    await save_plugin_config(key, config_patch)
-    logger.info(f"Genie TTS 配置已写入: key={key}, patch={config_patch}")
-
-
 @plugin.mount_command(
     name="genie_tts_set",
     description="设置默认角色",
@@ -682,8 +672,7 @@ async def genie_tts_set_cmd(
     if not model_name:
         return CmdCtl.failed("用法: genie_tts_set <角色名>")
     try:
-        await _save_genie_plugin_config({"DEFAULT_MODEL": model_name})
-        config.DEFAULT_MODEL = model_name
+        await save_plugin_config(_PLUGIN_CONFIG_KEY, {"DEFAULT_MODEL": model_name})
     except Exception as e:
         return CmdCtl.failed(f"设置默认角色失败: {e}")
     return CmdCtl.success(f"默认角色已设置为: {model_name}")
@@ -873,20 +862,10 @@ async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> Co
 )
 async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) -> CommandResponse:
     chat_key = _extract_chat_key_from_context(context)
-    has_session_override = chat_key in _session_auto_emotion_enabled
-    enabled = _session_auto_emotion_enabled.get(
-        chat_key,
-        bool(config.ENABLE_AUTO_EMOTION_RECOGNITION),
-    )
+    enabled = _session_auto_emotion_enabled.get(chat_key, bool(config.ENABLE_AUTO_EMOTION_RECOGNITION))
     character_name = _session_auto_emotion_character.get(chat_key, "").strip() or (config.DEFAULT_MODEL or "").strip()
     status_text = "开启" if enabled else "关闭"
-    source_text = "会话覆盖" if has_session_override else "继承全局配置"
-    global_text = "开启" if bool(config.ENABLE_AUTO_EMOTION_RECOGNITION) else "关闭"
-    return CmdCtl.success(
-        f"当前会话自动情感识别: {status_text}（{source_text}）\n"
-        f"全局配置 ENABLE_AUTO_EMOTION_RECOGNITION: {global_text}\n"
-        f"当前角色: {character_name}",
-    )
+    return CmdCtl.success(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
 
 
 @plugin.mount_command(
@@ -899,19 +878,17 @@ async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) ->
 )
 async def genie_tts_help_cmd(context: CommandExecutionContext) -> CommandResponse:
     return CmdCtl.success(
-        "Genie TTS 指令说明\n\n"
-        "全局配置相关（会写入配置项，对后续会话生效）:\n"
-        "genie_tts_set <角色名>  # 修改 DEFAULT_MODEL\n\n"
-        "会话级相关（仅当前会话有效，不修改配置项）:\n"
-        "genie_tts_auto_emotion_on [角色名]\n"
-        "genie_tts_auto_emotion_off\n"
-        "genie_tts_auto_emotion_status\n"
-        "genie_tts_emotion_set 情感名\n"
-        "genie_tts_emotion_clear\n\n"
-        "情感库管理（全局数据）:\n"
+        "使用 genie_tts_set 来设置角色名\n"
+        "具体用法:\n"
+        "genie_tts_set <角色名>\n\n"
+        "情感命令:\n"
         "genie_tts_emotion_add 情感名|参考音频路径|参考文本|[语言]\n"
         "genie_tts_emotion_del 情感名\n"
         "genie_tts_emotion_list [角色名]\n"
-        "genie_tts_emotion_add 角色名|情感名|参考音频路径|参考文本|[语言]\n"
-        "genie_tts_emotion_del 角色名|情感名",
+        "genie_tts_emotion_set 情感名\n"
+        "genie_tts_emotion_clear\n\n"
+        "自动情感识别命令:\n"
+        "genie_tts_auto_emotion_on [角色名]\n"
+        "genie_tts_auto_emotion_off\n"
+        "genie_tts_auto_emotion_status"
     )
