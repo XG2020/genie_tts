@@ -64,10 +64,10 @@
    - 拉取镜像 docker pull xggm/genie-tts-docker:latest
    - 然后执行下面的命令
      ```
-      docker run -d --name genie-tts -p 7860:7860 `
-        -v "${HOME}\srv\genie_tts\models:/code/models:ro" `
-        -v "${HOME}\srv\genie_tts\reference_audio:/code/reference_audio" `
-        -e GENIE_PRELOAD_CHARACTERS=feibi `
+      docker run -d --name genie-tts -p 7860:7860 \
+        -v "${HOME}/srv/genie_tts/models:/code/models:ro" \
+        -v "${HOME}/srv/genie_tts/reference_audio:/code/reference_audio" \
+        -e GENIE_PRELOAD_CHARACTERS=feibi \
         xggm/genie-tts-docker:latest
       ```
 - 作者还提供了 **Windows 一键整合包**，极大简化了部署流程，详情请访问其 GitHub。
