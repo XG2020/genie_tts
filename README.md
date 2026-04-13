@@ -1,6 +1,6 @@
 # Genie TTS 插件
 
-基于 Genie TTS 的文本转语音插件。  
+基于 Genie TTS 的文本转语音的Nekro Agent插件。  
 插件通过 Genie TTS 服务将文本合成为语音，并支持情感参考音频、翻译预处理、文本清洗、句子切分并发合成、多服务故障切换。
 
 ## 功能概览
@@ -74,7 +74,7 @@
      -e GENIE_PRELOAD_CHARACTERS=feibi \
      xggm/genie-tts-docker:latest
       ```
-   - 默认api接口 url: htpp://127.0.0.1:7860
+   - 默认api接口 url: http://127.0.0.1:7860
  
    
 - 作者还提供了 **Windows 一键整合包**，极大简化了部署流程，详情请访问其 GitHub。
