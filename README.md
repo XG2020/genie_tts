@@ -77,7 +77,7 @@
    - 默认api接口 url: http://127.0.0.1:7860
  
    
-- 作者还提供了 **Windows 一键整合包**，极大简化了部署流程，详情请访问其 GitHub。
+- 作者还提供了 *[*Windows 一键整合包](https://github.com/High-Logic/Genie-TTS/releases)**，极大简化了部署流程，详情请访问其 GitHub。
 
 **部署完成后，请记下您的服务 URL (例如 `https://your-name-your-space.hf.space`)，后续配置插件时需要用到。**
 
