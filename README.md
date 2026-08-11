@@ -12,6 +12,8 @@
 - 支持文本清洗（正则移除括号内容等）
 - 支持句子切分 + 并发合成 + WAV 自动拼接
 - 支持多 TTS 服务地址轮询与失败重试
+- 自动情绪识别后会切换到对应情绪的参考音频，再调用 TTS 接口
+- 会话级重复请求拦截，避免一次回复连续发送多条相同语音
 
 ## 工作流程
 
@@ -112,6 +114,7 @@
 | `SENTENCE_SPLIT_REGEX` | `([。、，！？,.!?])` | 句子切分正则 |
 | `ENABLE_TTS_TEXT_CLEANING` | `False` | 是否启用文本清洗 |
 | `TTS_TEXT_CLEAN_REGEX` | 见插件默认值 | 文本清洗正则 |
+| `DUPLICATE_REQUEST_WINDOW_SECONDS` | `30` | 同一会话重复提交相同文本的拦截窗口；设为 `0` 可关闭 |
 | `TTS_MAX_RETRIES` | `2` | 每个分块最大重试次数 |
 | `TTS_MAX_CONCURRENCY` | `2` | 分块并发上限 |
 | `TTS_TIMEOUT` | `120` | TTS 请求超时（秒） |
@@ -145,7 +148,9 @@
 - `参考音频路径` 必须是相对路径，且不能包含 `..`
 - `emotion_set` 仅在当前会话生效
 - `auto_emotion_on/off` 仅在当前会话生效，不会修改全局配置 `ENABLE_AUTO_EMOTION_RECOGNITION`
-- 自动情感识别会在当前角色已注册情感中选择最匹配项
+- 自动情感识别会在当前角色已注册情感中选择最匹配项，并把该情绪的参考音频提交给 `/set_reference_audio`
+- `DEFAULT_MODEL` 或 `auto_emotion_on` 指定的角色名必须与 `CONFIGURED_EMOTIONS` 的一级键完全一致；昔涟配置应使用 `cyrene`
+- 工具会把完整文本合成为一条语音；相同会话在重复拦截窗口内再次提交相同文本时不会重复发送
 - `auto_emotion_status` 会优先显示当前会话状态；若当前会话未覆盖，则继承全局配置开关
 
 ## 情感配置示例

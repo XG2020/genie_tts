@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import json
 import os
 import re
 import tempfile
@@ -33,6 +34,10 @@ from .emotion_manager import EmotionManager
 from .plugin import config, get_model_group_info, plugin
 
 _server_locks: dict[str, asyncio.Lock] = {}
+# 每个会话单独加锁，防止模型并发或连续重复调用时发送多条相同语音。
+_tts_request_locks: dict[str, asyncio.Lock] = {}
+# chat_key -> (原始文本, 最近一次成功发送的单调时钟时间)
+_recent_tts_requests: dict[str, tuple[str, float]] = {}
 _KEEPALIVE_CHAT_KEY = "system_genie_tts_keepalive"
 _PLUGIN_CONFIG_KEY = (
     f"{getattr(plugin, 'author', '')}.{getattr(plugin, 'module_name', '')}".strip(".")
@@ -85,6 +90,20 @@ _emotion_manager = _create_emotion_manager()
 def reload_emotion_manager():
     global _emotion_manager
     _emotion_manager = _create_emotion_manager()
+
+
+def _sync_emotion_manager_from_config() -> None:
+    """同步 emotions.json 和配置面板，避免运行中修改配置后仍使用旧情绪。"""
+    _emotion_manager.refresh_config_emotions(config.CONFIGURED_EMOTIONS)
+
+
+def _get_tts_request_lock(chat_key: str) -> asyncio.Lock:
+    """取得会话级 TTS 锁；不同会话仍可并行合成。"""
+    lock = _tts_request_locks.get(chat_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tts_request_locks[chat_key] = lock
+    return lock
 
 
 def _get_server_lock(server_url: str) -> asyncio.Lock:
@@ -234,22 +253,53 @@ async def _translate_text(text: str) -> str:
 
 
 def _normalize_detected_emotion(raw_text: str, valid_emotions: list[str]) -> str | None:
+    """把模型的自由格式输出规范为已注册的情绪名。"""
     text = (raw_text or "").strip()
-    if not text:
+    if not text or not valid_emotions:
         return None
-    candidates = [text, text.splitlines()[0].strip()]
-    for candidate in candidates:
-        cleaned = candidate.strip().strip("`").strip('"').strip("'").strip("[]")
-        if cleaned in valid_emotions:
-            return cleaned
+
     lower_map = {name.lower(): name for name in valid_emotions}
+
+    def match_candidate(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip().strip("`").strip().strip('"').strip("'")
+        cleaned = cleaned.rstrip("。.!！,，;；")
+        # 兼容 emotion: happy、情绪：happy 等常见模型输出。
+        label_match = re.match(
+            r"^(?:emotion(?:_name)?|label|result|情绪|情感)\s*[:：]\s*(.+)$",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if label_match:
+            cleaned = label_match.group(1).strip().strip('"').strip("'")
+        return lower_map.get(cleaned.lower())
+
+    candidates: list[object] = [text, text.splitlines()[0].strip()]
+    json_text = text.strip("`").strip()
+    try:
+        parsed = json.loads(json_text)
+        if isinstance(parsed, dict):
+            for key in ("emotion", "emotion_name", "label", "result", "情绪", "情感"):
+                if key in parsed:
+                    candidates.append(parsed[key])
+        elif isinstance(parsed, list):
+            candidates.extend(parsed)
+        else:
+            candidates.append(parsed)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
     for candidate in candidates:
-        lowered = candidate.strip().strip("`").strip('"').strip("'").strip("[]").lower()
-        if lowered in lower_map:
-            return lower_map[lowered]
-    for name in valid_emotions:
-        if name in text:
-            return name
+        matched = match_candidate(candidate)
+        if matched:
+            return matched
+
+    # 最后使用单词边界搜索，避免把 sad 错误匹配到其他较长单词中。
+    for emotion_name in sorted(valid_emotions, key=len, reverse=True):
+        pattern = rf"(?<![\w-]){re.escape(emotion_name)}(?![\w-])"
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return lower_map[emotion_name.lower()]
     return None
 
 
@@ -262,6 +312,7 @@ async def _detect_emotion_name(text: str, character_name: str) -> str | None:
         raise RuntimeError("自动情感识别已启用，但未选择模型。")
     emotions = _emotion_manager.list_emotions(character_name)
     if not emotions:
+        logger.warning(f"角色 {character_name!r} 没有已注册情绪，无法执行自动情感识别。")
         return None
     prompt_template = (
         (config.AUTO_EMOTION_PROMPT or "").strip()
@@ -413,7 +464,10 @@ def _pcm16le_to_wav_bytes(audio_bytes: bytes, sample_rate: int = 32000, channels
     return output.getvalue()
 
 
-async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str, str, str]:
+async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str, str, str, str]:
+    """解析本次合成实际使用的角色、参考音频、语言和情绪名。"""
+    _sync_emotion_manager_from_config()
+
     character_name = (config.DEFAULT_MODEL or "").strip()
     ref_audio_path = (config.REFERENCE_AUDIO_PATH or "").strip()
     ref_audio_text = (config.REFERENCE_AUDIO_TEXT or "").strip()
@@ -426,78 +480,79 @@ async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str
     selected_character = chat_state.selected_character.strip()
     selected_emotion = chat_state.selected_emotion.strip()
     if selected_character and selected_emotion:
-        emo_data = _emotion_manager.get_emotion_data(
-            selected_character,
-            selected_emotion,
-        )
+        emo_data = _emotion_manager.get_emotion_data(selected_character, selected_emotion)
         if emo_data:
+            logger.info(
+                f"[{chat_key}] 使用会话指定情绪: 角色={selected_character}, 情绪={selected_emotion}"
+            )
             return (
                 selected_character,
                 emo_data["ref_audio_path"],
                 emo_data["ref_audio_text"],
                 emo_data.get("language", language),
+                selected_emotion,
             )
+        logger.warning(
+            f"[{chat_key}] 会话指定情绪不存在，继续尝试自动/默认情绪: "
+            f"角色={selected_character}, 情绪={selected_emotion}"
+        )
 
     auto_emotion_enabled = (
         chat_state.auto_emotion_enabled
         if chat_state.auto_emotion_enabled is not None
         else bool(config.ENABLE_AUTO_EMOTION_RECOGNITION)
     )
-    auto_emotion_character = (
-        chat_state.auto_emotion_character.strip() or character_name
-    )
+    auto_emotion_character = chat_state.auto_emotion_character.strip() or character_name
     if auto_emotion_enabled and auto_emotion_character:
-        detected_emotion = await _detect_emotion_name(text=text, character_name=auto_emotion_character)
+        detected_emotion = await _detect_emotion_name(
+            text=text,
+            character_name=auto_emotion_character,
+        )
         if detected_emotion:
             emo_data = _emotion_manager.get_emotion_data(auto_emotion_character, detected_emotion)
             if emo_data:
+                logger.info(
+                    f"[{chat_key}] 自动情感识别完成: "
+                    f"角色={auto_emotion_character}, 情绪={detected_emotion}"
+                )
                 return (
                     auto_emotion_character,
                     emo_data["ref_audio_path"],
                     emo_data["ref_audio_text"],
                     emo_data.get("language", language),
+                    detected_emotion,
                 )
 
     default_emotion = (config.DEFAULT_EMOTION_NAME or "").strip()
     if default_emotion:
         emo_data = _emotion_manager.get_emotion_data(character_name, default_emotion)
         if emo_data:
+            logger.info(
+                f"[{chat_key}] 使用默认情绪: 角色={character_name}, 情绪={default_emotion}"
+            )
             return (
                 character_name,
                 emo_data["ref_audio_path"],
                 emo_data["ref_audio_text"],
                 emo_data.get("language", language),
+                default_emotion,
             )
-    return character_name, ref_audio_path, ref_audio_text, language
+        logger.warning(
+            f"[{chat_key}] 默认情绪不存在，已回退基础参考音频: "
+            f"角色={character_name}, 情绪={default_emotion}"
+        )
+    logger.info(f"[{chat_key}] 使用基础参考音频: 角色={character_name}")
+    return character_name, ref_audio_path, ref_audio_text, language, ""
 
 
-@plugin.mount_sandbox_method(
-    SandboxMethodType.TOOL,
-    name="生成Genie语音",
-    description="将文本转换为语音并返回音频字节数据",
-)
-async def genie_tts(
-    _ctx: AgentCtx,
-    content: str,
-) -> bytes:
-    """将输入文本合成为语音并发送到当前会话。
-
-    AI 调用示例：
-    - 用户说：请把“こんにちは”读出来
-      AI 工具调用：生成Genie语音(content="こんにちは")
-    - 用户说：用当前角色把这句话读出来：今天天气真好
-      AI 工具调用：生成Genie语音(content="今天天气真好")
-    """
-    text = (content or "").strip()
-    if not text:
-        raise ValueError("文本内容不能为空。")
-
+async def _generate_and_send_tts(_ctx: AgentCtx, text: str) -> tuple[str, str]:
+    """完成一次合成与发送，返回实际角色名和情绪名。"""
     servers = _resolve_servers()
     if not servers:
         raise ValueError("请先配置可用的 Genie TTS 服务地址。")
 
     headers = _build_headers()
-    character_name, ref_audio_path, ref_audio_text, language = await _resolve_emotion_reference(
+    character_name, ref_audio_path, ref_audio_text, language, emotion_name = await _resolve_emotion_reference(
         _ctx.from_chat_key,
         text,
     )
@@ -593,7 +648,7 @@ async def genie_tts(
             else:
                 merged_audio = _merge_wav_bytes(audio_parts)
         await send_audio(_ctx.from_chat_key, merged_audio)
-        return merged_audio
+        return character_name, emotion_name
     except RuntimeError:
         raise
     except httpx.HTTPStatusError as e:
@@ -603,6 +658,57 @@ async def genie_tts(
     except Exception as e:
         raise RuntimeError(f"出现未知问题: {e}")
 
+@plugin.mount_sandbox_method(
+    SandboxMethodType.TOOL,
+    name="生成Genie语音",
+    description=(
+        "将完整文本合成为一条语音并直接发送到当前会话。"
+        "一次用户请求只调用一次；成功后不要再次调用，也不要按句拆成多次调用。"
+    ),
+)
+async def genie_tts(_ctx: AgentCtx, content: str) -> str:
+    """将完整回复文本合成为一条语音并发送。
+
+    调用规则：
+    - content 应传入需要朗读的完整文本，不要把一句回复拆成多个工具调用。
+    - 工具内部会根据当前角色配置自动选择情绪参考音频。
+    - 每个用户请求仅调用一次；成功返回后不得再次调用本工具。
+    - 返回值只是发送结果说明，不包含音频二进制数据。
+    """
+    text = (content or "").strip()
+    if not text:
+        raise ValueError("文本内容不能为空。")
+
+    chat_key = (_ctx.from_chat_key or "").strip()
+    if not chat_key:
+        raise ValueError("无法确定当前会话，不能发送语音。")
+
+    request_lock = _get_tts_request_lock(chat_key)
+    async with request_lock:
+        duplicate_window = max(int(config.DUPLICATE_REQUEST_WINDOW_SECONDS), 0)
+        now = time.monotonic()
+        previous = _recent_tts_requests.get(chat_key)
+        if (
+            duplicate_window > 0
+            and previous is not None
+            and previous[0] == text
+            and now - previous[1] < duplicate_window
+        ):
+            logger.info(
+                f"[{chat_key}] 已拦截重复语音请求，窗口={duplicate_window}秒。"
+            )
+            return "相同语音刚刚已经发送，本次重复调用已忽略；不要再次调用本工具。"
+
+        # 只有真正发送成功后才记录，合成失败时仍允许模型或用户重试。
+        character_name, emotion_name = await _generate_and_send_tts(_ctx, text)
+        if duplicate_window > 0:
+            _recent_tts_requests[chat_key] = (text, time.monotonic())
+
+        emotion_display = emotion_name or "default"
+        return (
+            f"语音已成功发送；角色={character_name}，情绪={emotion_display}。"
+            "本次请求已经完成，不要再次调用本工具，也不要重复发送相同语音。"
+        )
 
 @plugin.mount_init_method()
 async def init():

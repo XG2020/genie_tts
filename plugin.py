@@ -94,7 +94,7 @@ class TTSConfig(ConfigBase):
         description="自动情感识别失败时是否回退到默认情感/默认参考音频。",
     )
     CONFIGURED_EMOTIONS: Dict[str, Dict[str, Dict[str, str]]] = Field(
-        default={},
+        default_factory=dict,
         title="配置的情感数据",
         description="通过配置面板注册的情感数据，格式为 {角色名: {情感名: {ref_audio_path: 路径, ref_audio_text: 文本, language: 语言}}}",
     )
@@ -167,6 +167,11 @@ class TTSConfig(ConfigBase):
         default=r"\([^()]*\)|（[^（）]*）|\[[^\[\]]*\]|【[^【】]*】|\{[^{}]*\}|｛[^｛｝]*｝|<[^<>]*>|《[^《》]*》",
         title="文本清洗正则",
         description="用于文本清洗的正则表达式。",
+    )
+    DUPLICATE_REQUEST_WINDOW_SECONDS: int = Field(
+        default=30,
+        title="重复语音拦截窗口秒数",
+        description="同一会话在该时间内重复提交相同文本时，只发送第一条语音；设为0可关闭。",
     )
     TTS_MAX_RETRIES: int = Field(
         default=2,

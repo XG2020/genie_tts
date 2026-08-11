@@ -27,8 +27,17 @@ class EmotionManager:
         except Exception:
             return {}
 
+    def refresh_config_emotions(
+        self,
+        config_emotions: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None,
+    ) -> None:
+        """重新加载文件情绪并合并最新配置；配置面板数据优先。"""
+        self.config_emotions = config_emotions or {}
+        self.emotions_data = self._load_emotions_from_file()
+        self._merge_configured_emotions()
+
     def _merge_configured_emotions(self):
-        """Merge configured emotions with file-based emotions (config takes precedence)"""
+        """合并文件和配置面板中的情绪；同名项以配置面板为准。"""
         for character_name, emotions in self.config_emotions.items():
             if character_name not in self.emotions_data:
                 self.emotions_data[character_name] = {}
