@@ -229,18 +229,25 @@ def _build_headers() -> dict[str, str]:
 
 async def _translate_text(text: str) -> str:
     if not bool(config.ENABLE_TRANSLATION):
+        logger.debug("翻译未启用，TTS 使用原始文本。")
         return text
+
     model_name = (config.TRANSLATION_MODEL or "").strip()
     prompt = (config.TRANSLATION_PROMPT or "").strip() or "你是翻译助手。"
     if not model_name:
         if bool(config.TRANSLATION_FALLBACK_TO_ORIGINAL):
-            logger.warning("翻译已启用但未选择翻译模型，已回退为原文。")
+            logger.warning("翻译已启用但未选择翻译模型，未调用翻译模型，已回退为原文。")
             return text
         raise RuntimeError("翻译已启用，但未选择翻译模型。")
+
     try:
         model_group = get_model_group_info(model_name)
         if model_group.MODEL_TYPE != "chat":
             raise ValueError("翻译模型必须是聊天模型组。")
+        logger.info(
+            f"翻译开始: 模型组={model_name}, 模型={model_group.CHAT_MODEL}, "
+            f"原文长度={len(text)}"
+        )
         response = await asyncio.wait_for(
             gen_openai_chat_response(
                 model=model_group.CHAT_MODEL,
@@ -256,10 +263,16 @@ async def _translate_text(text: str) -> str:
         translated_text = (response.response_content or "").strip()
         if not translated_text:
             raise RuntimeError("翻译结果为空。")
+        logger.info(
+            f"翻译完成: 模型组={model_name}, 译文长度={len(translated_text)}，"
+            "后续 TTS 将使用译文。"
+        )
         return translated_text
     except Exception as e:
         if bool(config.TRANSLATION_FALLBACK_TO_ORIGINAL):
-            logger.warning(f"翻译失败，已回退为原文: {e}")
+            logger.warning(
+                f"翻译失败，未使用译文，已回退为原文: 模型组={model_name}, 错误={e}"
+            )
             return text
         raise RuntimeError(f"翻译失败: {e}")
 
@@ -587,7 +600,10 @@ async def _generate_and_send_tts(_ctx: AgentCtx, text: str) -> tuple[str, str]:
     timeout = max(int(config.TTS_TIMEOUT), 10)
     try:
         async with httpx.AsyncClient(timeout=timeout, proxy=_get_proxy()) as client:
-            text = await _translate_text(text)
+            source_text = text
+            text = await _translate_text(source_text)
+            if text != source_text:
+                logger.info("TTS 文本已使用翻译结果，而非原始文本。")
             if bool(config.ENABLE_TTS_TEXT_CLEANING):
                 text = _clean_text_for_tts(text)
                 if not text:
