@@ -95,7 +95,7 @@
 | `token` | `None` | Bearer Token；为空或 `None` 时不附带鉴权头 |
 | `DEFAULT_MODEL` | `feibi` | 默认角色名（全局配置，可通过 `genie_tts_set` 修改） |
 | `DEFAULT_EMOTION_NAME` | `""` | 默认情感名；命中时覆盖默认参考音频配置 |
-| `ENABLE_AUTO_EMOTION_RECOGNITION` | `False` | 全局默认自动情感识别开关；仅作为会话初始值，运行中可被会话命令覆盖 |
+| `ENABLE_AUTO_EMOTION_RECOGNITION` | `False` | 全局自动情感识别开关；开启后会强制启用模型识别，避免旧会话关闭状态继续绕过模型 |
 | `AUTO_EMOTION_MODEL` | `default` | 自动情感识别使用的模型组（必须是 chat 类型） |
 | `AUTO_EMOTION_PROMPT` | 见插件默认值 | 自动情感识别提示词模板，支持 `{emotion_list}` 和 `{text}` |
 | `AUTO_EMOTION_TIMEOUT` | `30` | 自动情感识别超时（秒） |
@@ -147,11 +147,11 @@
 - 省略角色名时使用 `DEFAULT_MODEL`
 - `参考音频路径` 必须是相对路径，且不能包含 `..`
 - `emotion_set` 仅在当前会话生效
-- `auto_emotion_on/off` 仅在当前会话生效，不会修改全局配置 `ENABLE_AUTO_EMOTION_RECOGNITION`
-- 自动情感识别会在当前角色已注册情感中选择最匹配项，并把该情绪的参考音频提交给 `/set_reference_audio`
+- `auto_emotion_on/off` 仅修改当前会话状态，不会修改全局配置；当全局开关开启时，以全局开启为准
+- 自动情感识别优先于会话固定情绪和默认情绪：模型会先在当前角色已注册情感中选择最匹配项，再把该情绪的参考音频提交给 `/set_reference_audio`
 - `DEFAULT_MODEL` 或 `auto_emotion_on` 指定的角色名必须与 `CONFIGURED_EMOTIONS` 的一级键完全一致；昔涟配置应使用 `cyrene`
 - 工具会把完整文本合成为一条语音；相同会话在重复拦截窗口内再次提交相同文本时不会重复发送
-- `auto_emotion_status` 会优先显示当前会话状态；若当前会话未覆盖，则继承全局配置开关
+- `auto_emotion_status` 会显示有效开关、全局/会话状态、识别模型组、当前角色和实际候选情绪，可用于确认模型调用条件
 
 ## 情感配置示例
 

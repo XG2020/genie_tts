@@ -97,6 +97,18 @@ def _sync_emotion_manager_from_config() -> None:
     _emotion_manager.refresh_config_emotions(config.CONFIGURED_EMOTIONS)
 
 
+def _get_auto_emotion_enabled(chat_state: TTSChatState) -> bool:
+    """返回本次请求实际使用的自动情感识别开关。
+
+    配置面板打开全局开关后，必须优先于旧的会话级关闭状态；否则用户
+    之前执行过 auto_emotion_off 后，即使重新打开全局配置，模型也永远
+    不会被调用，只会使用默认参考音频。
+    """
+    if bool(config.ENABLE_AUTO_EMOTION_RECOGNITION):
+        return True
+    return chat_state.auto_emotion_enabled is True
+
+
 def _get_tts_request_lock(chat_key: str) -> asyncio.Lock:
     """取得会话级 TTS 锁；不同会话仍可并行合成。"""
     lock = _tts_request_locks.get(chat_key)
@@ -323,6 +335,10 @@ async def _detect_emotion_name(text: str, character_name: str) -> str | None:
         model_group = get_model_group_info(model_name)
         if model_group.MODEL_TYPE != "chat":
             raise ValueError("自动情感识别模型必须是聊天模型组。")
+        logger.info(
+            f"自动情感识别开始: 模型组={model_name}, 模型={model_group.CHAT_MODEL}, "
+            f"角色={character_name}, 候选情绪={emotions}"
+        )
         response = await asyncio.wait_for(
             gen_openai_chat_response(
                 model=model_group.CHAT_MODEL,
@@ -338,6 +354,10 @@ async def _detect_emotion_name(text: str, character_name: str) -> str | None:
         detected_text = (response.response_content or "").strip()
         emotion_name = _normalize_detected_emotion(detected_text, emotions)
         if emotion_name:
+            logger.info(
+                f"自动情感识别完成: 模型组={model_name}, 角色={character_name}, "
+                f"识别结果={emotion_name}，原始结果={detected_text!r}"
+            )
             return emotion_name
         if bool(config.AUTO_EMOTION_FALLBACK_TO_DEFAULT):
             logger.warning(f"自动情感识别结果无效，已回退默认情感: {detected_text}")
@@ -472,38 +492,23 @@ async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str
     ref_audio_path = (config.REFERENCE_AUDIO_PATH or "").strip()
     ref_audio_text = (config.REFERENCE_AUDIO_TEXT or "").strip()
     language = (config.LANGUAGE or "jp").strip()
-    if not character_name or not ref_audio_path or not ref_audio_text:
-        raise ValueError("请先配置角色、参考音频路径和参考音频文本。")
+    if not character_name:
+        raise ValueError("请先配置默认角色。")
 
     chat_state = await _get_tts_chat_state(chat_key)
-
-    selected_character = chat_state.selected_character.strip()
-    selected_emotion = chat_state.selected_emotion.strip()
-    if selected_character and selected_emotion:
-        emo_data = _emotion_manager.get_emotion_data(selected_character, selected_emotion)
-        if emo_data:
-            logger.info(
-                f"[{chat_key}] 使用会话指定情绪: 角色={selected_character}, 情绪={selected_emotion}"
-            )
-            return (
-                selected_character,
-                emo_data["ref_audio_path"],
-                emo_data["ref_audio_text"],
-                emo_data.get("language", language),
-                selected_emotion,
-            )
-        logger.warning(
-            f"[{chat_key}] 会话指定情绪不存在，继续尝试自动/默认情绪: "
-            f"角色={selected_character}, 情绪={selected_emotion}"
-        )
-
-    auto_emotion_enabled = (
-        chat_state.auto_emotion_enabled
-        if chat_state.auto_emotion_enabled is not None
-        else bool(config.ENABLE_AUTO_EMOTION_RECOGNITION)
-    )
+    auto_emotion_enabled = _get_auto_emotion_enabled(chat_state)
     auto_emotion_character = chat_state.auto_emotion_character.strip() or character_name
-    if auto_emotion_enabled and auto_emotion_character:
+    configured_character = _emotion_manager.get_character_name(auto_emotion_character)
+    if configured_character:
+        auto_emotion_character = configured_character
+
+    # 自动识别优先于手动/默认情绪；否则旧会话状态中的 selected_emotion
+    # 会短路模型调用，表现为始终使用固定参考音频。
+    if auto_emotion_enabled:
+        logger.info(
+            f"[{chat_key}] 自动情感识别已启用，准备调用模型: "
+            f"角色={auto_emotion_character}, 模型组={(config.AUTO_EMOTION_MODEL or '').strip() or '<empty>'}"
+        )
         detected_emotion = await _detect_emotion_name(
             text=text,
             character_name=auto_emotion_character,
@@ -523,6 +528,26 @@ async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str
                     detected_emotion,
                 )
 
+    selected_character = chat_state.selected_character.strip()
+    selected_emotion = chat_state.selected_emotion.strip()
+    if selected_character and selected_emotion:
+        emo_data = _emotion_manager.get_emotion_data(selected_character, selected_emotion)
+        if emo_data:
+            logger.info(
+                f"[{chat_key}] 使用会话指定情绪: 角色={selected_character}, 情绪={selected_emotion}"
+            )
+            return (
+                selected_character,
+                emo_data["ref_audio_path"],
+                emo_data["ref_audio_text"],
+                emo_data.get("language", language),
+                selected_emotion,
+            )
+        logger.warning(
+            f"[{chat_key}] 会话指定情绪不存在，继续使用默认情绪: "
+            f"角色={selected_character}, 情绪={selected_emotion}"
+        )
+
     default_emotion = (config.DEFAULT_EMOTION_NAME or "").strip()
     if default_emotion:
         emo_data = _emotion_manager.get_emotion_data(character_name, default_emotion)
@@ -541,6 +566,8 @@ async def _resolve_emotion_reference(chat_key: str, text: str) -> tuple[str, str
             f"[{chat_key}] 默认情绪不存在，已回退基础参考音频: "
             f"角色={character_name}, 情绪={default_emotion}"
         )
+    if not ref_audio_path or not ref_audio_text:
+        raise ValueError("请先配置参考音频路径和参考音频文本，或注册至少一个角色情绪。")
     logger.info(f"[{chat_key}] 使用基础参考音频: 角色={character_name}")
     return character_name, ref_audio_path, ref_audio_text, language, ""
 
@@ -1010,16 +1037,29 @@ async def genie_tts_auto_emotion_off_cmd(context: CommandExecutionContext) -> Co
     category="GenieTTS",
 )
 async def genie_tts_auto_emotion_status_cmd(context: CommandExecutionContext) -> CommandResponse:
+    _sync_emotion_manager_from_config()
     chat_key = _extract_chat_key_from_context(context)
     chat_state = await _get_tts_chat_state(chat_key)
-    enabled = (
-        chat_state.auto_emotion_enabled
-        if chat_state.auto_emotion_enabled is not None
-        else bool(config.ENABLE_AUTO_EMOTION_RECOGNITION)
-    )
+    enabled = _get_auto_emotion_enabled(chat_state)
     character_name = chat_state.auto_emotion_character.strip() or (config.DEFAULT_MODEL or "").strip()
+    emotions = _emotion_manager.list_emotions(character_name)
     status_text = "开启" if enabled else "关闭"
-    return CmdCtl.success(f"当前会话自动情感识别: {status_text}\n当前角色: {character_name}")
+    global_status = "开启" if bool(config.ENABLE_AUTO_EMOTION_RECOGNITION) else "关闭"
+    session_status = (
+        "继承全局"
+        if chat_state.auto_emotion_enabled is None
+        else ("开启" if chat_state.auto_emotion_enabled else "关闭（全局开启时由全局配置覆盖）")
+    )
+    model_name = (config.AUTO_EMOTION_MODEL or "").strip() or "<未配置>"
+    emotion_text = ", ".join(emotions) if emotions else "<未找到该角色的情绪配置>"
+    return CmdCtl.success(
+        f"当前会话自动情感识别: {status_text}\n"
+        f"全局开关: {global_status}\n"
+        f"会话设置: {session_status}\n"
+        f"识别模型组: {model_name}\n"
+        f"当前角色: {character_name}\n"
+        f"候选情绪: {emotion_text}"
+    )
 
 
 @plugin.mount_command(

@@ -56,11 +56,36 @@ class EmotionManager:
         except Exception:
             return False
 
+    def get_character_name(self, character_name: str) -> Optional[str]:
+        """Return the configured character key, tolerating case/whitespace differences."""
+        requested = (character_name or "").strip()
+        if requested in self.emotions_data:
+            return requested
+        requested_lower = requested.casefold()
+        for configured_name in self.emotions_data:
+            if configured_name.strip().casefold() == requested_lower:
+                return configured_name
+        return None
+
     def get_emotion_data(self, character_name: str, emotion_name: str) -> Optional[Dict[str, str]]:
-        return self.emotions_data.get(character_name, {}).get(emotion_name)
+        resolved_character = self.get_character_name(character_name)
+        if resolved_character is None:
+            return None
+        emotions = self.emotions_data.get(resolved_character, {})
+        requested_emotion = (emotion_name or "").strip()
+        if requested_emotion in emotions:
+            return emotions[requested_emotion]
+        requested_lower = requested_emotion.casefold()
+        for configured_name, emotion_data in emotions.items():
+            if configured_name.strip().casefold() == requested_lower:
+                return emotion_data
+        return None
 
     def list_emotions(self, character_name: str) -> list[str]:
-        return list(self.emotions_data.get(character_name, {}).keys())
+        resolved_character = self.get_character_name(character_name)
+        if resolved_character is None:
+            return []
+        return list(self.emotions_data.get(resolved_character, {}).keys())
 
     def register_emotion(
         self,
